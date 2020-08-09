@@ -130,3 +130,5 @@ dmypy.json
 # Pyre type checker
 .pyre/
 calculator_test.py
+stats_lib/class_interface.py
+stats_lib/classes.py

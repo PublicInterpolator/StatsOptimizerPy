@@ -1,9 +1,9 @@
 import random
 import functools
-import itertools
 import numpy as np
 import scipy.optimize as opt
 import scipy.interpolate as itp
+from stats_lib.utils import indexed_sort
 
 EPSILON = 1e-8
 """ Numbers with absolute value less than EPSILON will be considered as zeros. """
@@ -362,6 +362,7 @@ class StatsCalculator:
     Brutality.regression_initialize()
     _n = 5
 
+    # //////////////////// Public section ////////////////////
     @staticmethod
     def proficiency_mult(prof):
         """
@@ -494,14 +495,17 @@ class StatsCalculator:
             return l_diff * lost_hp
 
     @staticmethod
-    def fortune_mult(fort):
+    def fortune_mult(fort, inst=0.0):
         """
         Calculates the fortune multiplier.
+        May consider the target's instinct.
 
         Parameters
         ----------
         fort : int, float
             Amount of fortune.
+        inst : int, float, optional
+            Amount of target's instinct.
 
         Returns
         -------
@@ -511,17 +515,21 @@ class StatsCalculator:
         -----
         The multiplier isn't random and is calculated in terms of mean value of damage.
         """
-        return StatsCalculator._special_stat_multiplier(fort, 4e-4)
+        cff = StatsCalculator._fortune_cff_calculate(inst)
+        return StatsCalculator._special_stat_multiplier(fort, cff)
 
     @staticmethod
-    def fortune_mult_diff(fort):
+    def fortune_mult_diff(fort, inst=0.0):
         """
         Calculates the derivative of the fortune multiplier.
+        May consider the target's instinct.
 
         Parameters
         ----------
         fort : int, float
             Amount of fortune.
+        inst : int, float, optional
+            Amount of target's instinct.
 
         Returns
         -------
@@ -531,7 +539,8 @@ class StatsCalculator:
         -----
         The multiplier isn't random and is calculated in terms of mean value of damage.
         """
-        return StatsCalculator._special_stat_multiplier_diff(fort, 4e-4)
+        cff = StatsCalculator._fortune_cff_calculate(inst)
+        return StatsCalculator._special_stat_multiplier_diff(fort, cff)
 
     @staticmethod
     def dominance_mult(dom):
@@ -648,14 +657,6 @@ class StatsCalculator:
         return StatsCalculator._special_stat_multiplier(inst, -4e-4)
 
     @staticmethod
-    def _special_stat_multiplier(stat, cff):
-        return 1.0 + cff * SpecialSpline(stat) * stat
-
-    @staticmethod
-    def _special_stat_multiplier_diff(stat, cff):
-        return cff * (SpecialSpline.diff(stat) * stat + SpecialSpline(stat))
-
-    @staticmethod
     def crit_chance_calculate(fort):
         """
         Calculates the probability (from [0, 1]) of critical damage.
@@ -706,7 +707,7 @@ class StatsCalculator:
         return cls._n
 
     @classmethod
-    def noncrit_dmg_calculate(cls, stats, det_pool, lost_hp=None):
+    def noncrit_dmg_calculate(cls, stats, *, det_pool, lost_hp=None):
         """
         Calculates the total noncrit damage multiplier (ignoring fortune).
 
@@ -737,7 +738,7 @@ class StatsCalculator:
         return dmg
 
     @classmethod
-    def dmg_calculate(cls, stats, det_pool, lost_hp=None):
+    def dmg_calculate(cls, stats, *, det_pool, lost_hp=None, inst=0.0):
         """
         Calculates the total damage multiplier
         (crits are considered in terms of mean value).
@@ -751,23 +752,25 @@ class StatsCalculator:
         lost_hp : float, optional
             Normalized value of lost hp from [0, 1] interval, if lost_hp is None,
             the brutality multiplier will be calculated with lost_hp = gamma(brut).
+        inst : int, float, optional
+            Amount of target's instinct.
 
         Returns
         -------
         float
-
 
         See also
         --------
         Brutality.l_calculate
         Brutality.gamma
         """
-        return cls.noncrit_dmg_calculate(stats, det_pool, lost_hp) * cls.fortune_mult(stats[3])
+        noncrit_dmg = cls.noncrit_dmg_calculate(stats, det_pool=det_pool, lost_hp=lost_hp)
+        return noncrit_dmg * cls.fortune_mult(stats[3], inst)
 
     @classmethod
-    def dmg_grad(cls, stats, det_pool, lost_hp=None):
+    def dmg_grad(cls, stats, *, det_pool, lost_hp=None, inst=0.0):
         """
-        Calculates the gradient of the total damage multiplier
+        Calculates the gradient vector of the total damage multiplier
         (crits are considered in terms of mean value).
 
         Parameters
@@ -779,32 +782,34 @@ class StatsCalculator:
         lost_hp : float, optional
             Normalized value of lost hp from [0, 1] interval, if lost_hp is None,
             the brutality multiplier will be calculated with lost_hp = gamma(brut).
+        inst : int, float, optional
+            Amount of target's instinct.
 
         Returns
         -------
         np.ndarray
-
 
         See also
         --------
         Brutality.l_calculate
         Brutality.gamma
         """
-        dmg = cls.dmg_calculate(stats, det_pool, lost_hp)
+        dmg = cls.dmg_calculate(stats, det_pool=det_pool, lost_hp=lost_hp, inst=inst)
         prof_diff = dmg * cls.proficiency_mult_diff(stats[0]) / cls.proficiency_mult(stats[0])
-        det_diff = dmg * cls.determination_mult_diff(stats[1], det_pool) / cls.determination_mult(stats[1], det_pool)
-        brut_diff = dmg * cls.brutality_mult_diff(stats[2], lost_hp) / cls.brutality_mult(stats[2], lost_hp)
-        fort_diff = dmg * cls.fortune_mult_diff(stats[3]) / cls.fortune_mult(stats[3])
+        det_diff = dmg * cls.determination_mult_diff(stats[1], det_pool)
+        det_diff /= cls.determination_mult(stats[1], det_pool)
+        brut_diff = dmg * cls.brutality_mult_diff(stats[2], lost_hp)
+        brut_diff /= cls.brutality_mult(stats[2], lost_hp)
+        fort_diff = dmg * cls.fortune_mult_diff(stats[3], inst) / cls.fortune_mult(stats[3], inst)
         dom_diff = dmg * cls.dominance_mult_diff(stats[4]) / cls.dominance_mult(stats[4])
         return np.array([prof_diff, det_diff, brut_diff, fort_diff, dom_diff], copy=False).T
 
     @classmethod
-    def multi_approximate_optimization(cls, stats_sum, det_pool, lost_hp=None,
-                                       lb=None, ub=None, stats0=None):
+    def multi_approximate_optimization(cls, stats_sum, *, det_pool, lost_hp=None,
+                                       inst=0.0, lb=None, ub=None, stats0=None):
         """
         Calculates the optimal stats distribution with fixed sum and
-        lower and upper bounds.
-        (crits are considered in terms of mean value).
+        lower and upper bounds (crits are considered in terms of mean value).
 
         Parameters
         ----------
@@ -815,6 +820,8 @@ class StatsCalculator:
         lost_hp : float, optional
             Normalized value of lost hp from [0, 1] interval, if lost_hp is None,
             the brutality multiplier will be calculated with lost_hp = gamma(brut).
+        inst : int, float, optional
+            Amount of target's instinct.
         lb : list, tuple, ndarray, optional
             List of lower bounds for stats. By default is None, in this case
             lower bounds will be 0 for all stats.
@@ -838,8 +845,7 @@ class StatsCalculator:
 
         In most cases is better to call "optimization" method, than this method directly.
         The only reason to directly call "multi_approximate_optimization" instead of "optimization" is that
-        goal function is expected to have several local maximum.
-
+        objective function is expected to have several local maximum.
 
         See also
         --------
@@ -857,23 +863,24 @@ class StatsCalculator:
         approximations = []
         if stats0 is not None:
             approximations.append(stats0)
-        approximations.append(cls._get_initial_approximation(stats_sum, lb, ub))
+        approximations.append(cls._get_initial_approximation(stats_sum, lb=lb, ub=ub))
         for index in range(n):
-            approximations.append(cls._get_initial_approximation(stats_sum, lb, ub, index))
+            approximations.append(cls._get_initial_approximation(stats_sum, lb=lb,
+                                                                 ub=ub, index=index))
 
         results = []
         for approximation in approximations:
-            results.append(cls._numerical_optimize(stats_sum, det_pool, lost_hp, lb, ub, approximation))
+            results.append(cls._numerical_optimize(stats_sum, det_pool=det_pool, lost_hp=lost_hp,
+                                                   inst=inst, lb=lb, ub=ub, stats0=approximation))
         results.sort(key=lambda result: -result.fun)
         return np.array(results[-1].x, copy=False)
 
     @classmethod
-    def optimization(cls, stats_sum, det_pool, lost_hp=None,
-                     lb=None, ub=None, stats0=None):
+    def optimization(cls, stats_sum, *, det_pool, lost_hp=None,
+                     inst=0.0, lb=None, ub=None, stats0=None):
         """
         Calculates the optimal stats distribution with fixed sum and
-        lower and upper bounds.
-        (crits are considered in terms of mean value).
+        lower and upper bounds (crits are considered in terms of mean value).
 
         Parameters
         ----------
@@ -884,6 +891,8 @@ class StatsCalculator:
         lost_hp : float, optional
             Normalized value of lost hp from [0, 1] interval, if lost_hp is None,
             the brutality multiplier will be calculated with lost_hp = gamma(brut).
+        inst : int, float, optional
+            Amount of target's instinct.
         lb : list, tuple, ndarray, optional
             List of lower bounds for stats. By default is None, in this case
             lower bounds will be 0 for all stats.
@@ -907,7 +916,7 @@ class StatsCalculator:
 
         In most cases is better to call this method, than directly the "multi_approximate_optimization" method.
         The only reason to directly call "multi_approximate_optimization" instead of "optimization" is that
-        goal function is expected to have several local maximum.
+        the objective function is expected to have several local maximum.
 
         See also
         --------
@@ -922,44 +931,20 @@ class StatsCalculator:
         if ub is None:
             ub = stats_sum * np.ones(n)
         if stats0 is None:
-            approximation = cls._get_initial_approximation(stats_sum, lb, ub)
+            approximation = cls._get_initial_approximation(stats_sum, lb=lb, ub=ub)
         else:
             approximation = stats0
 
-        result = cls._numerical_optimize(stats_sum, det_pool, lost_hp, lb, ub, approximation)
+        result = cls._numerical_optimize(stats_sum, det_pool=det_pool, lost_hp=lost_hp,
+                                         inst=inst, lb=lb, ub=ub, stats0=approximation)
         if result.success:
             return np.array(result.x, copy=False)
         else:
-            return cls.multi_approximate_optimization(stats_sum, det_pool, lost_hp, lb, ub, stats0)
+            return cls.multi_approximate_optimization(stats_sum, det_pool=det_pool, lost_hp=lost_hp,
+                                                      inst=inst, lb=lb, ub=ub, stats0=stats0)
 
     @classmethod
-    def _get_initial_approximation(cls, stats_sum, lb, ub, index=None):
-        n = cls.stats_number()
-        c = np.zeros(n)
-        if index is not None:
-            if not 0 <= index < n:
-                index = 0
-            c[index] = 1.0
-        solution = opt.linprog(c, A_eq=np.ones((1, n)), b_eq=stats_sum, bounds=list(zip(lb, ub)))
-        return np.array(solution.x)
-
-    @classmethod
-    def _numerical_optimize(cls, stats_sum, det_pool, lost_hp, lb, ub, stats0):
-        def goal(s, dp, lhp):
-            return -cls.dmg_calculate(s, det_pool=dp, lost_hp=lhp)
-
-        def grad(s, dp, lhp):
-            return -cls.dmg_grad(s, det_pool=dp, lost_hp=lhp)
-
-        n = cls.stats_number()
-        args = det_pool, lost_hp
-        bounds = opt.Bounds(lb, ub)
-        constraint = opt.LinearConstraint(np.ones(n), stats_sum, stats_sum)
-        return opt.minimize(goal, stats0, args, bounds=bounds, constraints=constraint,
-                            jac=grad, method='trust-constr', options={'maxiter': n * 5})
-
-    @classmethod
-    def analytical_optimization(cls, stats_sum, det_pool):
+    def analytical_optimization(cls, stats_sum, *, det_pool, inst):
         """
         Calculates the optimal stats distribution with fixed sum
         (crits are considered in terms of mean value).
@@ -970,6 +955,8 @@ class StatsCalculator:
             Sum of stats.
         det_pool : float
             Normalized value of determination pool from [0, 1] interval.
+        inst : int, float, optional
+            Amount of target's instinct.
 
         Returns
         -------
@@ -989,7 +976,7 @@ class StatsCalculator:
         optimization
         multi_approximate_optimization
         """
-        thresholds, indices = cls._threshold_matrix_calculate(det_pool)
+        thresholds, indices = cls._threshold_matrix_calculate(det_pool, inst)
         n = cls.stats_number()
 
         def stats_calculate(th_number):
@@ -1006,17 +993,57 @@ class StatsCalculator:
             return stats_calculate(n - 1)
         return np.zeros(n)
 
+    # //////////////////// End public section ////////////////////
+
+    # //////////////////// Private section ////////////////////
+    @staticmethod
+    @functools.lru_cache(maxsize=128)
+    def _fortune_cff_calculate(inst):
+        inst_mult = 1.0
+        if np.abs(inst) >= EPSILON:
+            inst_mult = StatsCalculator.instinct_mult(inst)
+        return 8e-4 * (3.0 / 2.0 * inst_mult - 1.0)
+
+    @staticmethod
+    def _special_stat_multiplier(stat, cff):
+        return 1.0 + cff * SpecialSpline(stat) * stat
+
+    @staticmethod
+    def _special_stat_multiplier_diff(stat, cff):
+        return cff * (SpecialSpline.diff(stat) * stat + SpecialSpline(stat))
+
+    @classmethod
+    def _get_initial_approximation(cls, stats_sum, *, lb, ub, index=None):
+        n = cls.stats_number()
+        c = np.zeros(n)
+        if index is not None:
+            if not 0 <= index < n:
+                index = 0
+            c[index] = 1.0
+        solution = opt.linprog(c, A_eq=np.ones((1, n)), b_eq=stats_sum, bounds=list(zip(lb, ub)))
+        return np.array(solution.x)
+
+    @classmethod
+    def _numerical_optimize(cls, stats_sum, *, det_pool, lost_hp, inst, lb, ub, stats0):
+        def objective(s):
+            return -cls.dmg_calculate(s, det_pool=det_pool, lost_hp=lost_hp, inst=inst)
+
+        def grad(s):
+            return -cls.dmg_grad(s, det_pool=det_pool, lost_hp=lost_hp, inst=inst)
+
+        n = cls.stats_number()
+        bounds = opt.Bounds(lb, ub)
+        constraint = opt.LinearConstraint(np.ones(n), stats_sum, stats_sum)
+        return opt.minimize(objective, stats0, bounds=bounds, constraints=constraint,
+                            jac=grad, method='trust-constr', options={'maxiter': n * 5})
+
     @classmethod
     @functools.lru_cache(maxsize=16)
-    def _threshold_matrix_calculate(cls, det_pool):
+    def _threshold_matrix_calculate(cls, det_pool, inst):
         n = cls.stats_number()
-        coefficients = cls.dmg_grad(np.zeros(n), det_pool)
+        coefficients = cls.dmg_grad(np.zeros(n), det_pool=det_pool, inst=inst)
         coefficients[np.abs(coefficients) < EPSILON] = EPSILON
-        coefficients_indexed = list(zip(coefficients, itertools.count()))
-        coefficients_indexed.sort(key=lambda c: c[0], reverse=True)
-
-        coefficients = [cff[0] for cff in coefficients_indexed]
-        indices = [cff[1] for cff in coefficients_indexed]
+        coefficients, indices = indexed_sort(coefficients, reverse=True)
 
         def threshold_calculate(stats_number, stat_index):
             inverse_sum = 0.0
@@ -1029,3 +1056,4 @@ class StatsCalculator:
             for j in range(i + 1):
                 thresholds[i][j] = threshold_calculate(i + 1, j)
         return thresholds, indices
+    # //////////////////// End private section ////////////////////
