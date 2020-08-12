@@ -1,4 +1,3 @@
-import random
 import functools
 import numpy as np
 import scipy.optimize as opt
@@ -331,33 +330,33 @@ class StatsCalculator:
     Methods:
     --------
     Stats multipliers and their derivatives:
-        proficiency_mult
-        proficiency_mult_diff
-        determination_mult
-        determination_mult_diff
-        brutality_mult
-        brutality_mult_diff
-        fortune_mult
-        fortune_mult_diff
-        dominance_mult
-        dominance_mult_diff
-        vitality_mult
-        survivability_mult
-        caution_mult
-        instinct_mult
+        - proficiency_mult
+        - proficiency_mult_diff
+        - determination_mult
+        - determination_mult_diff
+        - brutality_mult
+        - brutality_mult_diff
+        - fortune_mult
+        - fortune_mult_diff
+        - dominance_mult
+        - dominance_mult_diff
+        - vitality_mult
+        - survivability_mult
+        - caution_mult
+        - instinct_mult
 
     Optimization methods:
-        analytical_optimization
-        optimization
-        multi_approximate_optimization
+        - analytical_optimization
+        - optimization
+        - multi_approximate_optimization
 
     Other methods:
-        stats_number - number of supported offensive stats
-        crit_randomize - returns True with the given probability
-        crit_chance_calculate - calculates crit probability
-        noncrit_dmg_calculate - calculates the total damage multiplier ignoring fortune
-        dmg_calculate - calculates the mean value of total damage multiplier with fortune
-        dmg_grad - calculates gradient vector of "dmg_calculate" by all stats
+        - stats_number - number of supported offensive stats
+        - crit_chance_calculate - calculates the crit probability
+        - crit_chance_diff - calculates the derivative of the crit probability by fortune
+        - noncrit_dmg_calculate - calculates the total damage multiplier ignoring fortune
+        - dmg_calculate - calculates the mean value of total damage multiplier with fortune
+        - dmg_grad - calculates gradient vector of 'dmg_calculate' by all stats
     """
     Brutality.regression_initialize()
     _n = 5
@@ -494,8 +493,8 @@ class StatsCalculator:
         else:
             return l_diff * lost_hp
 
-    @staticmethod
-    def fortune_mult(fort, inst=0.0):
+    @classmethod
+    def fortune_mult(cls, fort, inst=0.0):
         """
         Calculates the fortune multiplier.
         May consider the target's instinct.
@@ -515,11 +514,11 @@ class StatsCalculator:
         -----
         The multiplier isn't random and is calculated in terms of mean value of damage.
         """
-        cff = StatsCalculator._fortune_cff_calculate(inst)
-        return StatsCalculator._special_stat_multiplier(fort, cff)
+        cff = cls._fortune_cff_calculate(inst)
+        return 1.0 + cff * cls.crit_chance_calculate(fort)
 
-    @staticmethod
-    def fortune_mult_diff(fort, inst=0.0):
+    @classmethod
+    def fortune_mult_diff(cls, fort, inst=0.0):
         """
         Calculates the derivative of the fortune multiplier.
         May consider the target's instinct.
@@ -539,8 +538,8 @@ class StatsCalculator:
         -----
         The multiplier isn't random and is calculated in terms of mean value of damage.
         """
-        cff = StatsCalculator._fortune_cff_calculate(inst)
-        return StatsCalculator._special_stat_multiplier_diff(fort, cff)
+        cff = cls._fortune_cff_calculate(inst)
+        return cff * cls.crit_chance_diff(fort)
 
     @staticmethod
     def dominance_mult(dom):
@@ -673,27 +672,20 @@ class StatsCalculator:
         return 8e-4 * SpecialSpline(fort) * fort
 
     @staticmethod
-    def crit_randomize(crit_chance):
+    def crit_chance_diff(fort):
         """
-        Returns True with probability equals to crit_chance and False otherwise.
+        Calculates the derivative of the crit chance.
 
         Parameters
         ----------
-        crit_chance : float
-            Probability (from [0, 1]) of critical damage.
+        fort : int, float
+            Amount of fortune.
 
         Returns
         -------
-        bool
-
-        See also
-        --------
-        crit_chance_calculate
+        float
         """
-        rand_max = 10000
-        if random.randrange(0, rand_max) < crit_chance * rand_max:
-            return True
-        return False
+        return StatsCalculator._special_stat_multiplier_diff(fort, 8e-4)
 
     @classmethod
     def stats_number(cls):
@@ -1002,7 +994,7 @@ class StatsCalculator:
         inst_mult = 1.0
         if np.abs(inst) >= EPSILON:
             inst_mult = StatsCalculator.instinct_mult(inst)
-        return 8e-4 * (3.0 / 2.0 * inst_mult - 1.0)
+        return 3.0 / 2.0 * inst_mult - 1.0
 
     @staticmethod
     def _special_stat_multiplier(stat, cff):

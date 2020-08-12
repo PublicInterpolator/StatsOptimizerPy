@@ -1,4 +1,5 @@
 import operator
+import random
 
 
 def indexed_sort(arr, reverse=False):
@@ -23,3 +24,44 @@ def indexed_sort(arr, reverse=False):
     arr = [item[1] for item in arr_sorted]
     indices = [item[0] for item in arr_sorted]
     return arr, indices
+
+
+def random_event_generate(probability):
+    """
+    Returns True with given probability and False otherwise.
+
+    Parameters
+    ----------
+    probability : float
+        Probability of event (from [0, 1]).
+
+    Returns
+    -------
+    bool
+    """
+    rand_max = int(1e10)
+    if random.randrange(0, rand_max) < probability * rand_max:
+        return True
+    return False
+
+
+def documentation_inheritance(base):
+    """
+    Decorator for copying documentation.
+
+    Parameters
+    ----------
+    base : Any
+        Original object.
+
+    Returns
+    -------
+    Any
+        Decorated object.
+    """
+
+    def wrapper(inheritor):
+        inheritor.__doc__ = base.__doc__
+        return inheritor
+
+    return wrapper
