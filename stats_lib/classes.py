@@ -1,12 +1,11 @@
-import stats_lib.utils as utils
-import stats_lib.calculator as clc
-from stats_lib.calculator import StatsCalculator as Calc
 import numpy as np
 
-DEFAULT_DET_POOL = 0.95
+import stats_lib.utils as utils
+from stats_lib.stats_approximations import EPSILON, DEFAULT_DET_POOL, Brutality, SpecialStats
+from stats_lib.calculator import StatsCalculator
 
 
-class BaseClass(Calc):
+class BaseClass(StatsCalculator):
     """
     An object oriented wrapper over the StatsCalculator.
 
@@ -16,6 +15,7 @@ class BaseClass(Calc):
         - determination
         - brutality
         - fortune
+        - stats
         - stats_sum
 
     Methods:
@@ -39,15 +39,19 @@ class BaseClass(Calc):
         def __init__(self, index):
             self._index = index
 
+        def __set_name__(self, owner, name):
+            self._name = name
+
         def __get__(self, instance, owner):
-            return instance._stats[self._index]
+            return instance.stats[self._index]
 
         def __set__(self, instance, value):
             if value < 0.0:
-                print('Negative stat value, '
-                      'stat_index = ' + str(self._index) +
-                      'stat_value = ' + str(value))
-            instance._stats[self._index] = value
+                print('Negative stat {} (val = {})'.format(self._name, value))
+            instance.stats[self._index] = value
+
+    dominance_coefficient = 0.0
+    default_crit_chance = 0.0
 
     proficiency = _StatsDescriptor(0)
     determination = _StatsDescriptor(1)
@@ -55,12 +59,38 @@ class BaseClass(Calc):
     fortune = _StatsDescriptor(3)
     dominance = _StatsDescriptor(4)
 
-    _dom_cff = 0.0
-    _default_crit_chance = 0.0
+    @classmethod
+    def dominance_mult(cls, dom):
+        """
+        Parameters
+        ----------
+        dom : int, float
+            Amount of dominance.
 
-    def __init__(self, stats_sum=0.0):
-        n = self.stats_number()
-        self._stats = stats_sum / n * np.ones(n)
+        Returns
+        -------
+        float
+        """
+        return SpecialStats.special_stat_multiplier(dom, cls.dominance_coefficient)
+
+    @classmethod
+    def dominance_mult_diff(cls, dom):
+        """
+        Parameters
+        ----------
+        dom : int, float
+            Amount of dominance.
+
+        Returns
+        -------
+        float
+        """
+        return SpecialStats.special_stat_multiplier_diff(dom, cls.dominance_coefficient)
+
+    @classmethod
+    @utils.documentation_inheritance(StatsCalculator.crit_chance_calculate)
+    def crit_chance_calculate(cls, fort):
+        return StatsCalculator.crit_chance_calculate(fort) + cls.default_crit_chance
 
     @staticmethod
     def get_default_lb():
@@ -81,42 +111,28 @@ class BaseClass(Calc):
         """
         return np.array([48, 35, 35, 88, 40])
 
-    @classmethod
-    def dominance_mult(cls, dom):
+    def __init__(self, stats_sum=0.0):
+        n = self.stats_number()
+        self._stats = stats_sum / n * np.ones(n)
+
+    @property
+    def stats(self):
         """
-        Calculates the dominance multiplier.
-
-        Parameters
-        ----------
-        dom : int, float
-            Amount of dominance.
-
         Returns
         -------
-        float
+        np.ndarray
         """
-        return Calc._special_stat_multiplier(dom, cls._dom_cff)
+        return self._stats
 
-    @classmethod
-    def dominance_mult_diff(cls, dom):
+    @stats.setter
+    def stats(self, stats):
         """
-        Calculates the derivative of the dominance multiplier.
-
         Parameters
         ----------
-        dom : int, float
-            Amount of dominance.
-
-        Returns
-        -------
-        float
+        stats : list, np.ndarray
         """
-        return Calc._special_stat_multiplier_diff(dom, cls._dom_cff)
-
-    @classmethod
-    @utils.documentation_inheritance(Calc.crit_chance_calculate)
-    def crit_chance_calculate(cls, fort):
-        return Calc.crit_chance_calculate(fort) + cls._default_crit_chance
+        for i, stat in enumerate(stats):
+            self._stats[i] = stat
 
     @property
     def stats_sum(self):
@@ -127,17 +143,24 @@ class BaseClass(Calc):
         -------
         float
         """
-        return sum(self._stats)
+        return sum(self.stats)
 
-    def crit_randomize(self):
+    def crit_randomize(self, crit_chance=None):
         """
-        Returns True with probability equals to crit chance and False otherwise.
+        Returns True with probability equals to crit_chance and False otherwise.
+
+        Parameters
+        ----------
+        crit_chance : float, optional
+            Probability (from [0, 1]) of critical damage.
+            If None (default), then self.crit_chance_calculate will be used.
 
         Returns
         -------
         bool
         """
-        crit_chance = self.crit_chance_calculate(self.fortune)
+        if crit_chance is None:
+            crit_chance = self.crit_chance_calculate(self.fortune)
         return utils.random_event_generate(crit_chance)
 
     def noncrit_dmg(self, *, det_pool=DEFAULT_DET_POOL, lost_hp=None):
@@ -160,7 +183,7 @@ class BaseClass(Calc):
         --------
         StatsCalculator.noncrit_dmg_calculate
         """
-        return self.noncrit_dmg_calculate(self._stats, det_pool=det_pool, lost_hp=lost_hp)
+        return self.noncrit_dmg_calculate(self.stats, det_pool=det_pool, lost_hp=lost_hp)
 
     def dmg(self, *, det_pool=DEFAULT_DET_POOL, lost_hp=None, inst=0.0):
         """
@@ -185,7 +208,7 @@ class BaseClass(Calc):
         --------
         StatsCalculator.dmg_calculate
         """
-        return self.dmg_calculate(self._stats, det_pool=det_pool, lost_hp=lost_hp, inst=inst)
+        return self.dmg_calculate(self.stats, det_pool=det_pool, lost_hp=lost_hp, inst=inst)
 
     def stats_optimize(self, *, stats_sum=None, det_pool=DEFAULT_DET_POOL,
                        lost_hp=None, inst=0.0, lb=None, ub=None):
@@ -229,11 +252,11 @@ class BaseClass(Calc):
         """
         if stats_sum is None:
             stats_sum = self.stats_sum
-        self._stats = self.analytical_optimization(stats_sum, det_pool=det_pool, inst=inst)
+        self.stats = self.analytical_optimization(stats_sum, det_pool=det_pool, inst=inst)
         if lost_hp is None and self._analytical_solution_check(lb, ub):
             return
-        self._stats = self.optimization(stats_sum, det_pool=det_pool, lost_hp=lost_hp,
-                                        inst=inst, lb=lb, ub=ub, stats0=self._stats)
+        self.stats = self.optimization(stats_sum, det_pool=det_pool, lost_hp=lost_hp,
+                                       inst=inst, lb=lb, ub=ub, stats0=self.stats)
 
     def stats_round(self):
         """
@@ -248,8 +271,8 @@ class BaseClass(Calc):
         For example for class with stats [1.3, 1.4, 1.2, 1.8, 1.3]
         the result will be [1, 2, 1, 2, 1].
         """
-        rounded_stats = np.round(self._stats)
-        rounding_err = self._stats - rounded_stats
+        rounded_stats = np.round(self.stats)
+        rounding_err = self.stats - rounded_stats
         sum_discrepancy = round(sum(rounding_err))
         sign = int(np.sign(sum_discrepancy))
         sum_discrepancy *= sign
@@ -259,28 +282,28 @@ class BaseClass(Calc):
             if sum_discrepancy > 0:
                 rounded_stats[index] += sign
                 sum_discrepancy -= 1
-        self._stats = rounded_stats
+        self.stats = rounded_stats
 
     def _analytical_solution_check(self, lb, ub):
         n = self.stats_number()
-        th = clc.SpecialSpline.get_diminishing_threshold()
+        th = SpecialStats.get_diminishing_threshold()
         if lb is not None:
             for i in range(n):
-                if self._stats[i] < lb[i] - clc.EPSILON:
+                if self.stats[i] < lb[i] - EPSILON:
                     return False
         if ub is not None:
             for i in range(n):
-                if self._stats[i] > ub[i] + clc.EPSILON:
+                if self.stats[i] > ub[i] + EPSILON:
                     return False
-        if self.fortune > th + clc.EPSILON or self.dominance > th + clc.EPSILON:
+        if self.fortune > th + EPSILON or self.dominance > th + EPSILON:
             return False
         return True
 
 
 @utils.documentation_inheritance(BaseClass)
 class Bard(BaseClass):
-    _dom_cff = 2e-4
-    _default_crit_chance = 0.08
+    dominance_coefficient = 2e-4
+    default_crit_chance = 0.08
 
     @staticmethod
     @utils.documentation_inheritance(BaseClass.get_default_lb)
@@ -293,8 +316,8 @@ class Bard(BaseClass):
 
 @utils.documentation_inheritance(BaseClass)
 class Druid(BaseClass):
-    _dom_cff = 4e-4
-    _default_crit_chance = 0.1
+    dominance_coefficient = 4e-4
+    default_crit_chance = 0.1
 
     @staticmethod
     @utils.documentation_inheritance(BaseClass.get_default_lb)
@@ -308,7 +331,7 @@ class Druid(BaseClass):
 
 @utils.documentation_inheritance(BaseClass)
 class Engineer(BaseClass):
-    _dom_cff = 3e-4
+    dominance_coefficient = 3e-4
 
     @staticmethod
     @utils.documentation_inheritance(BaseClass.get_default_lb)
@@ -321,7 +344,7 @@ class Engineer(BaseClass):
 
 @utils.documentation_inheritance(BaseClass)
 class Mage(BaseClass):
-    _dom_cff = 5e-4
+    dominance_coefficient = 5e-4
 
     @staticmethod
     @utils.documentation_inheritance(BaseClass.get_default_lb)
@@ -334,7 +357,7 @@ class Mage(BaseClass):
 
 @utils.documentation_inheritance(BaseClass)
 class Necromancer(BaseClass):
-    _dom_cff = 6e-4
+    dominance_coefficient = 6e-4
 
     @staticmethod
     @utils.documentation_inheritance(BaseClass.get_default_lb)
@@ -348,7 +371,7 @@ class Necromancer(BaseClass):
 
 @utils.documentation_inheritance(BaseClass)
 class Paladin(BaseClass):
-    _dom_cff = 2.5e-4
+    dominance_coefficient = 2.5e-4
 
     @staticmethod
     @utils.documentation_inheritance(BaseClass.get_default_lb)
@@ -361,7 +384,7 @@ class Paladin(BaseClass):
 
 @utils.documentation_inheritance(BaseClass)
 class Priest(BaseClass):
-    _dom_cff = 5e-4
+    dominance_coefficient = 5e-4
 
     @staticmethod
     @utils.documentation_inheritance(BaseClass.get_default_lb)
@@ -375,8 +398,8 @@ class Priest(BaseClass):
 
 @utils.documentation_inheritance(BaseClass)
 class Psionic(BaseClass):
-    _dom_cff = 4.0e-4
-    _default_crit_chance = 0.06
+    dominance_coefficient = 4.0e-4
+    default_crit_chance = 0.06
 
     @staticmethod
     @utils.documentation_inheritance(BaseClass.get_default_lb)
@@ -389,7 +412,7 @@ class Psionic(BaseClass):
 
 @utils.documentation_inheritance(BaseClass)
 class Stalker(BaseClass):
-    _dom_cff = 6e-4
+    dominance_coefficient = 6e-4
 
     @staticmethod
     @utils.documentation_inheritance(BaseClass.get_default_lb)
@@ -402,8 +425,8 @@ class Stalker(BaseClass):
 
 @utils.documentation_inheritance(BaseClass)
 class Warrior(BaseClass):
-    _dom_cff = 4.5e-4
-    _default_crit_chance = 0.01
+    dominance_coefficient = 4.5e-4
+    default_crit_chance = 0.01
 
     @staticmethod
     @utils.documentation_inheritance(BaseClass.get_default_lb)
@@ -416,8 +439,8 @@ class Warrior(BaseClass):
 
 @utils.documentation_inheritance(BaseClass)
 class Warlock(BaseClass):
-    _dom_cff = 2.5e-4
-    _default_crit_chance = 0.1
+    dominance_coefficient = 2.5e-4
+    default_crit_chance = 0.1
 
     @staticmethod
     @utils.documentation_inheritance(BaseClass.get_default_lb)
@@ -426,5 +449,3 @@ class Warlock(BaseClass):
         lb[2] += 90
         lb[4] += 120
         return lb
-
-

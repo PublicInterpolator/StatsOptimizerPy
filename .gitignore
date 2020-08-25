@@ -130,3 +130,6 @@ dmypy.json
 # Pyre type checker
 .pyre/
 calculator_test.py
+simulations_test.py
+advanced_simulations/
+simulations/

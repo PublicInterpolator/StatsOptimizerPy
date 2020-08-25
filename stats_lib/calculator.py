@@ -1,323 +1,10 @@
 import functools
+
 import numpy as np
 import scipy.optimize as opt
-import scipy.interpolate as itp
-from stats_lib.utils import indexed_sort
 
-EPSILON = 1e-8
-""" Numbers with absolute value less than EPSILON will be considered as zeros. """
-
-
-class Brutality:
-    """
-    Provides methods which are required to calculate brutality multiplier and its' derivative.
-    Nonlinear dependencies are approximated by parametric regression.
-
-    Does not imply instantiation.
-    """
-
-    _params = [2.031e-3, 6.575, 5.315e-4]
-
-    _x = (0.0, 25.0, 50.0, 75.0, 100.0, 125.0, 150.0, 175.0, 200.0, 225.0,
-          250.0, 275.0, 300.0, 325.0, 350.0, 375.0, 400.0, 425.0, 450.0, 475.0,
-          500.0, 525.0, 550.0, 575.0, 600.0, 625.0, 650.0, 675.0, 700.0, 725.0,
-          750.0, 775.0, 800.0, 825.0, 850.0, 875.0, 900.0, 925.0, 950.0, 975.0,
-          1000.0, 1025.0, 1050.0, 1075.0, 1100.0, 1125.0, 1150.0, 1175.0, 1200.0, 1225.0,
-          1250.0, 1275.0, 1300.0, 1325.0, 1350.0, 1375.0, 1400.0, 1425.0, 1450.0, 1475.0,
-          1500.0, 1525.0, 1550.0, 1575.0, 1600.0, 1625.0, 1650.0, 1675.0, 1700.0, 1725.0,
-          1750.0, 1775.0, 1800.0, 1825.0, 1850.0, 1875.0, 1900.0, 1925.0, 1950.0, 1975.0, 2000.0)
-
-    _y = (0.0, 0.025, 0.05, 0.076, 0.102, 0.128, 0.154, 0.18, 0.206, 0.233,
-          0.26, 0.287, 0.314, 0.342, 0.369, 0.397, 0.425, 0.453, 0.482, 0.51,
-          0.539, 0.567, 0.596, 0.626, 0.655, 0.684, 0.714, 0.744, 0.774, 0.804,
-          0.834, 0.864, 0.895, 0.925, 0.956, 0.987, 1.02, 1.05, 1.08, 1.11,
-          1.14, 1.18, 1.21, 1.24, 1.27, 1.3, 1.34, 1.37, 1.4, 1.44,
-          1.47, 1.5, 1.53, 1.57, 1.6, 1.63, 1.67, 1.7, 1.74, 1.77,
-          1.81, 1.84, 1.87, 1.91, 1.94, 1.98, 2.01, 2.05, 2.08, 2.12,
-          2.15, 2.19, 2.23, 2.26, 2.3, 2.33, 2.37, 2.4, 2.44, 2.48, 2.51)
-
-    @classmethod
-    def l_calculate(cls, brut, a=_params[0], b=_params[1], c=_params[2]):
-        """
-        Parameters
-        ----------
-        brut : int, float
-            Amount of brutality.
-        a, b, c : float, optional
-            Parameters of l(brut)
-            (The default values is a good approximation,
-            use this arguments only if you know, what you are doing).
-
-        Returns
-        -------
-        float
-
-        Notes
-        -----
-        l(brut) is such function that brutality multiplier can be calculated
-        as 1 + l(brut) * HP_lost/HP_max. The explicit form of l(brut)
-        is c * ln(a*brut + b) * brut.
-        """
-        return c * np.log(a * brut + b) * brut
-
-    @classmethod
-    def l_diff(cls, brut, a=_params[0], b=_params[1], c=_params[2]):
-        """
-        Calculates the derivative of l(brut) by brutality.
-
-        Parameters
-        ----------
-        brut : int, float
-            Amount of brutality.
-        a, b, c : float, optional
-            Parameters of l(brut)
-            (The default values is a good approximation,
-            use this arguments only if you know, what you are doing).
-
-        Returns
-        -------
-        float
-
-        See also
-        --------
-        l_calculate
-        """
-        ex = a * brut + b
-        return c * (np.log(ex) + a * brut / ex)
-
-    @classmethod
-    def l_grad(cls, brut, a=_params[0], b=_params[1], c=_params[2]):
-        """
-        Calculates the gradient of l(brut) by parameters.
-
-        Parameters
-        ----------
-        brut : int, float
-           Amount of brutality.
-        a, b, c : float, optional
-           Parameters of l(brut).
-
-        Returns
-        -------
-        np.ndarray
-
-        See also
-        --------
-        l_calculate
-        """
-        ex = a * brut + b
-        diff_c = np.log(ex) * brut
-        diff_b = c * brut / ex
-        diff_a = diff_b * brut
-        return np.array([diff_a, diff_b, diff_c], copy=False).T
-
-    @classmethod
-    def gamma(cls, brut, a=_params[0], b=_params[1], c=_params[2]):
-        """
-        Parameters
-        ----------
-        brut : int, float
-            Amount of brutality.
-        a, b, c : float, optional
-            Parameters of l(brut)
-            (The default values is a good approximation,
-            use this arguments only if you know, what you are doing).
-
-        Returns
-        -------
-        float
-
-        Notes
-        -----
-        gamma(brut) is such function that brutality multiplier equals
-        1 + l(brut) * gamma(brut) following a full solo boss fight.
-
-        See also
-        --------
-        l_calculate
-        """
-        if np.abs(brut) < EPSILON:
-            return 0.5
-        l = cls.l_calculate(brut, a, b, c)
-        return 1.0 / np.log(1.0 + l) - 1.0 / l
-
-    @classmethod
-    def regression_initialize(cls):
-        """
-        Calculates the parameters p1, p2, p3 of l(brut) using nonlinear regression.
-        If this function isn't called, the initial approximations will be used
-        for those parameters.
-
-        See also
-        --------
-        l_calculate
-        """
-        params, _ = opt.curve_fit(cls.l_calculate, cls._x, cls._y,
-                                  jac=cls.l_grad, p0=cls._params, maxfev=5000)
-        cls._params = list(params)
-
-
-class SpecialSpline:
-    """
-    Provides the calculation of the special stats diminishing coefficient and its' derivative
-    using spline interpolation.
-
-    Does not imply instantiation.
-
-    Notes
-    -----
-    The detailed spline structure:
-        - Before reaching the diminishing threshold the coefficient is constant.
-        - From threshold to the end of known table values coefficient is interpolated with B-spline.
-        - On the interval between first and second table values B-spline is replaced with a cubic spline
-          in order smooth the joint between constant and B-spline.
-        - From the last table value spline is extrapolated with "tail". Different types of "tails"
-          is implemented, the hyperbolic one seems to be the most appropriate.
-
-    The resulting spline is continuous and has continuous first derivative.
-    """
-
-    _x = (750.0, 757.0, 770.0, 778.0, 783.0, 800.0, 808.0, 813.0, 818.0, 831.0,
-          841.0, 844.0, 855.0, 857.0, 865.0, 916.0, 921.0, 955.0, 963.0, 965.0,
-          979.0, 991.0, 995.0, 1024.0, 1067.0, 1218.0, 1370.0, 1521.0)
-
-    _y = (1.0, 0.9997, 0.9985, 0.9962, 0.9951, 0.9898, 0.9861, 0.9843, 0.9823, 0.9760,
-          0.9710, 0.9692, 0.9636, 0.9623, 0.9579, 0.9287, 0.9260, 0.9063, 0.9017, 0.9004,
-          0.8924, 0.8854, 0.8832, 0.8674, 0.8445, 0.7739, 0.7160, 0.6672)
-
-    # The several last table values are ignored in order to stabilize and smooth the spline
-    _last_values_cutoff = 2
-    _x = _x[:-_last_values_cutoff]
-    _y = _y[:-_last_values_cutoff]
-
-    class _BSpline:
-        def __init__(self, x, y, degree=5, smoothness=1.0):
-            self._spline = itp.splrep(x, y, k=degree, s=smoothness)
-
-        def __call__(self, x):
-            return itp.splev(x, self._spline)
-
-        def diff(self, x):
-            return itp.splev(x, self._spline, der=1)
-
-    class _HyperbolicTail:
-        """ The quasi - hyperbolic extrapolation, y = 1 / (a*x + b*ln(x) + c). """
-
-        def __init__(self, x, y, y_diff, inf_lim=8e-4):
-            # tail(x) * x -> inf_lim, x -> inf
-            # the default value is chosen so that crit chance -> 1 as fortune -> inf
-            self._a = inf_lim
-            self._b = -x * (y_diff / y ** 2.0 + self._a)
-            self._c = 1 / y - self._a * x - self._b * np.log(x)
-
-        def __call__(self, x):
-            return 1.0 / (self._a * x + self._b * np.log(x) + self._c)
-
-        def diff(self, x):
-            return -(self._a + self._b / x) * self(x) ** 2.0
-
-    class _SqrtTail:
-        """ The reciprocal square root extrapolation, y = a / sqrt(x - b). """
-
-        def __init__(self, x, y, y_diff):
-            self._a = np.sqrt(-0.5 * y ** 3.0 / y_diff)
-            self._b = x - self._a ** 2.0 / y ** 2.0
-
-        def __call__(self, x):
-            return self._a / np.sqrt(x - self._b)
-
-        def diff(self, x):
-            return -0.5 / (x - self._b) * self(x)
-
-    class _ExponentialTail:
-        """ The exponential extrapolation, y = a^(x - b). """
-
-        def __init__(self, x, y, y_diff):
-            self._a = np.exp(y_diff / y)
-            self._b = x - np.log(y) / np.log(self._a)
-
-        def __call__(self, x):
-            return np.power(self._a, x - self._b)
-
-        def diff(self, x):
-            return np.log(self._a) * self(x)
-
-    class _LinearTail:
-        """ The linear extrapolation, y = a*x + b. """
-
-        def __init__(self, x, y, y_diff):
-            self._a = y_diff
-            self._b = y - self._a * x
-
-        def __call__(self, x):
-            return self._a * x + self._b
-
-        def diff(self, x):
-            return self._a
-
-    _b_spline = _BSpline(_x, _y)
-    _tail = _HyperbolicTail(_x[-1], _b_spline(_x[-1]), _b_spline.diff(_x[-1]))
-    _cubic_spline = itp.CubicSpline(_x[0:2], [_y[0], _b_spline(_x[1])],
-                                    bc_type=((1, 0.0), (1, _b_spline.diff(_x[1]))))
-    _cubic_spline.diff = functools.partial(_cubic_spline.__call__, nu=1)
-
-    def __new__(cls, x):
-        """
-        Calculates the value of spline at x.
-
-        Parameters
-        ----------
-        x : float
-
-        Returns
-        -------
-        float
-
-        Notes
-        -----
-        The way to evaluate spline like 'y = SpecialSpline(x)'
-        is to override SpecialSpline instantiation.
-        """
-        if x < cls._x[0]:
-            return cls._y[0]
-        if cls._x[0] <= x < cls._x[1]:
-            return cls._cubic_spline(x)
-        if x >= cls._x[-1]:
-            return cls._tail(x)
-        return cls._b_spline(x)
-
-    @classmethod
-    def diff(cls, x):
-        """
-        Calculates the derivative of spline at x.
-
-        Parameters
-        ----------
-        x : float
-
-        Returns
-        -------
-        float
-        """
-        if x < cls._x[0]:
-            return 0.0
-        if cls._x[0] <= x < cls._x[1]:
-            return cls._cubic_spline.diff(x)
-        if x >= cls._x[-1]:
-            return cls._tail.diff(x)
-        return cls._b_spline.diff(x)
-
-    @classmethod
-    def get_diminishing_threshold(cls):
-        """
-        Returns the special stat amount starting from which
-        the spline ceases to be linear and special stat efficiency decreases.
-
-        Returns
-        -------
-        float
-        """
-        return cls._x[0]
+import stats_lib.utils as utils
+from stats_lib.stats_approximations import EPSILON, DEFAULT_DET_POOL, Brutality, SpecialStats
 
 
 class StatsCalculator:
@@ -358,15 +45,12 @@ class StatsCalculator:
         - dmg_calculate - calculates the mean value of total damage multiplier with fortune
         - dmg_grad - calculates gradient vector of 'dmg_calculate' by all stats
     """
-    Brutality.regression_initialize()
     _n = 5
 
     # //////////////////// Public section ////////////////////
     @staticmethod
     def proficiency_mult(prof):
         """
-        Calculates the proficiency multiplier.
-
         Parameters
         ----------
         prof : int, float
@@ -379,10 +63,8 @@ class StatsCalculator:
         return 1.0 + 5e-4 * prof
 
     @staticmethod
-    def proficiency_mult_diff(prof):
+    def proficiency_mult_diff(prof=0):
         """
-        Calculates the derivative of the proficiency multiplier.
-
         Parameters
         ----------
         prof : int, float
@@ -396,10 +78,8 @@ class StatsCalculator:
         return 5e-4
 
     @staticmethod
-    def determination_mult(det, det_pool):
+    def determination_mult(det, det_pool=DEFAULT_DET_POOL):
         """
-        Calculates the determination multiplier.
-
         Parameters
         ----------
         det : int, float
@@ -414,35 +94,29 @@ class StatsCalculator:
         return 1.0 + 7.5e-4 * det_pool * det
 
     @staticmethod
-    def determination_mult_diff(det, det_pool):
-        """ Calculates the derivative of the determination multiplier.
+    def determination_mult_diff(det=0, det_pool=DEFAULT_DET_POOL):
+        """
+        Parameters
+        ----------
+        det : int, float
+            Amount of determination
+            (since the derivative is constant, this argument is ignored).
+        det_pool : float
+            Normalized value of determination pool from [0, 1] interval.
 
-            Parameters
-            ----------
-            det : int, float
-                Amount of determination
-                (since the derivative is constant, this argument is ignored).
-            det_pool : float
-                Normalized value of determination pool from [0, 1] interval.
-
-            Returns
-            -------
-            float
+        Returns
+        -------
+        float
         """
         return 7.5e-4 * det_pool
 
     @staticmethod
     def brutality_mult(brut, lost_hp=None):
         """
-        Calculates the brutality multiplier.
-
         Parameters
         ----------
         brut : int, float
-            Amount of brutality.
         lost_hp : float, optional
-            Normalized value of lost hp from [0, 1] interval, if lost_hp is None,
-            the multiplier is calculated for lost_hp = gamma(brut).
 
         Returns
         -------
@@ -450,22 +124,14 @@ class StatsCalculator:
 
         See also
         --------
-        Brutality.l_calculate
+        Brutality.brutality_multiplier
         Brutality.gamma
         """
-        if np.abs(brut) < EPSILON:
-            return 1.0
-        l = Brutality.l_calculate(brut)
-        if lost_hp is None:
-            return l / np.log(1.0 + l)
-        else:
-            return 1.0 + l * lost_hp
+        return Brutality.brutality_multiplier(brut, lost_hp)
 
     @staticmethod
     def brutality_mult_diff(brut, lost_hp=None):
         """
-        Calculates the derivative of the brutality multiplier.
-
         Parameters
         ----------
         brut : int, float
@@ -480,25 +146,14 @@ class StatsCalculator:
 
         See also
         --------
-        Brutality.l_calculate
+        Brutality.brutality_multiplier
         Brutality.gamma
         """
-        l_diff = Brutality.l_diff(brut)
-        if lost_hp is None:
-            if np.abs(brut) < EPSILON:
-                return l_diff / 2.0
-            l = Brutality.l_calculate(brut)
-            lg = np.log(l + 1.0)
-            return (1.0 / lg - l / (l + 1.0) / lg ** 2.0) * l_diff
-        else:
-            return l_diff * lost_hp
+        return Brutality.brutality_multiplier_diff(brut, lost_hp)
 
     @classmethod
     def fortune_mult(cls, fort, inst=0.0):
         """
-        Calculates the fortune multiplier.
-        May consider the target's instinct.
-
         Parameters
         ----------
         fort : int, float
@@ -513,6 +168,7 @@ class StatsCalculator:
         Notes
         -----
         The multiplier isn't random and is calculated in terms of mean value of damage.
+        Also may consider the target's instinct.
         """
         cff = cls._fortune_cff_calculate(inst)
         return 1.0 + cff * cls.crit_chance_calculate(fort)
@@ -520,9 +176,6 @@ class StatsCalculator:
     @classmethod
     def fortune_mult_diff(cls, fort, inst=0.0):
         """
-        Calculates the derivative of the fortune multiplier.
-        May consider the target's instinct.
-
         Parameters
         ----------
         fort : int, float
@@ -537,6 +190,7 @@ class StatsCalculator:
         Notes
         -----
         The multiplier isn't random and is calculated in terms of mean value of damage.
+        Also may consider the target's instinct.
         """
         cff = cls._fortune_cff_calculate(inst)
         return cff * cls.crit_chance_diff(fort)
@@ -544,8 +198,6 @@ class StatsCalculator:
     @staticmethod
     def dominance_mult(dom):
         """
-        Calculates the dominance multiplier.
-
         Parameters
         ----------
         dom : int, float
@@ -568,8 +220,6 @@ class StatsCalculator:
     @staticmethod
     def dominance_mult_diff(dom):
         """
-        Calculates the derivative of the dominance multiplier.
-
         Parameters
         ----------
         dom : int, float
@@ -592,8 +242,6 @@ class StatsCalculator:
     @staticmethod
     def vitality_mult(vit):
         """
-        Calculates the vitality multiplier.
-
         Parameters
         ----------
         vit : int, float
@@ -608,8 +256,6 @@ class StatsCalculator:
     @staticmethod
     def survivability_mult(surv):
         """
-        Calculates the survivability multiplier.
-
         Parameters
         ----------
         surv : int, float
@@ -619,12 +265,11 @@ class StatsCalculator:
         -------
         float
         """
-        return StatsCalculator._special_stat_multiplier(surv, 8e-4)
+        return SpecialStats.special_stat_multiplier(surv, 8e-4)
 
     @staticmethod
     def caution_mult(caut):
         """
-        Calculates the caution multiplier.
         The multiplier represents damage reduction factor at 40% and less hp.
 
         Parameters
@@ -636,12 +281,11 @@ class StatsCalculator:
         -------
         float
         """
-        return StatsCalculator._special_stat_multiplier(caut, -4e-4)
+        return SpecialStats.special_stat_multiplier(caut, -4e-4)
 
     @staticmethod
     def instinct_mult(inst):
         """
-        Calculates the instinct multiplier.
         The multiplier represents the critical damage damage reduction factor.
 
         Parameters
@@ -653,7 +297,7 @@ class StatsCalculator:
         -------
         float
         """
-        return StatsCalculator._special_stat_multiplier(inst, -4e-4)
+        return SpecialStats.special_stat_multiplier(inst, -4e-4)
 
     @staticmethod
     def crit_chance_calculate(fort):
@@ -669,7 +313,7 @@ class StatsCalculator:
         -------
         float
         """
-        return 8e-4 * SpecialSpline(fort) * fort
+        return 8e-4 * SpecialStats.spline(fort) * fort
 
     @staticmethod
     def crit_chance_diff(fort):
@@ -685,10 +329,10 @@ class StatsCalculator:
         -------
         float
         """
-        return StatsCalculator._special_stat_multiplier_diff(fort, 8e-4)
+        return SpecialStats.special_stat_multiplier_diff(fort, 8e-4)
 
-    @classmethod
-    def stats_number(cls):
+    @staticmethod
+    def stats_number():
         """
         Returns the number of supported offensive stats.
 
@@ -696,10 +340,10 @@ class StatsCalculator:
         -------
         int
         """
-        return cls._n
+        return StatsCalculator._n
 
     @classmethod
-    def noncrit_dmg_calculate(cls, stats, *, det_pool, lost_hp=None):
+    def noncrit_dmg_calculate(cls, stats, *, det_pool=DEFAULT_DET_POOL, lost_hp=None):
         """
         Calculates the total noncrit damage multiplier (ignoring fortune).
 
@@ -730,7 +374,7 @@ class StatsCalculator:
         return dmg
 
     @classmethod
-    def dmg_calculate(cls, stats, *, det_pool, lost_hp=None, inst=0.0):
+    def dmg_calculate(cls, stats, *, det_pool=DEFAULT_DET_POOL, lost_hp=None, inst=0.0):
         """
         Calculates the total damage multiplier
         (crits are considered in terms of mean value).
@@ -760,7 +404,7 @@ class StatsCalculator:
         return noncrit_dmg * cls.fortune_mult(stats[3], inst)
 
     @classmethod
-    def dmg_grad(cls, stats, *, det_pool, lost_hp=None, inst=0.0):
+    def dmg_grad(cls, stats, *, det_pool=DEFAULT_DET_POOL, lost_hp=None, inst=0.0):
         """
         Calculates the gradient vector of the total damage multiplier
         (crits are considered in terms of mean value).
@@ -797,8 +441,8 @@ class StatsCalculator:
         return np.array([prof_diff, det_diff, brut_diff, fort_diff, dom_diff], copy=False).T
 
     @classmethod
-    def multi_approximate_optimization(cls, stats_sum, *, det_pool, lost_hp=None,
-                                       inst=0.0, lb=None, ub=None, stats0=None):
+    def multi_approximate_optimization(cls, stats_sum, *, det_pool=DEFAULT_DET_POOL,
+                                       lost_hp=None, inst=0.0, lb=None, ub=None, stats0=None):
         """
         Calculates the optimal stats distribution with fixed sum and
         lower and upper bounds (crits are considered in terms of mean value).
@@ -868,8 +512,8 @@ class StatsCalculator:
         return np.array(results[-1].x, copy=False)
 
     @classmethod
-    def optimization(cls, stats_sum, *, det_pool, lost_hp=None,
-                     inst=0.0, lb=None, ub=None, stats0=None):
+    def optimization(cls, stats_sum, *, det_pool=DEFAULT_DET_POOL,
+                     lost_hp=None, inst=0.0, lb=None, ub=None, stats0=None):
         """
         Calculates the optimal stats distribution with fixed sum and
         lower and upper bounds (crits are considered in terms of mean value).
@@ -936,7 +580,7 @@ class StatsCalculator:
                                                       inst=inst, lb=lb, ub=ub, stats0=stats0)
 
     @classmethod
-    def analytical_optimization(cls, stats_sum, *, det_pool, inst):
+    def analytical_optimization(cls, stats_sum, *, det_pool=DEFAULT_DET_POOL, inst=0.0):
         """
         Calculates the optimal stats distribution with fixed sum
         (crits are considered in terms of mean value).
@@ -988,21 +632,13 @@ class StatsCalculator:
     # //////////////////// End public section ////////////////////
 
     # //////////////////// Private section ////////////////////
-    @staticmethod
+    @classmethod
     @functools.lru_cache(maxsize=128)
-    def _fortune_cff_calculate(inst):
+    def _fortune_cff_calculate(cls, inst):
         inst_mult = 1.0
         if np.abs(inst) >= EPSILON:
-            inst_mult = StatsCalculator.instinct_mult(inst)
+            inst_mult = cls.instinct_mult(inst)
         return 3.0 / 2.0 * inst_mult - 1.0
-
-    @staticmethod
-    def _special_stat_multiplier(stat, cff):
-        return 1.0 + cff * SpecialSpline(stat) * stat
-
-    @staticmethod
-    def _special_stat_multiplier_diff(stat, cff):
-        return cff * (SpecialSpline.diff(stat) * stat + SpecialSpline(stat))
 
     @classmethod
     def _get_initial_approximation(cls, stats_sum, *, lb, ub, index=None):
@@ -1032,10 +668,13 @@ class StatsCalculator:
     @classmethod
     @functools.lru_cache(maxsize=16)
     def _threshold_matrix_calculate(cls, det_pool, inst):
+        """
+        Do not modify the result!!!!
+        """
         n = cls.stats_number()
         coefficients = cls.dmg_grad(np.zeros(n), det_pool=det_pool, inst=inst)
         coefficients[np.abs(coefficients) < EPSILON] = EPSILON
-        coefficients, indices = indexed_sort(coefficients, reverse=True)
+        coefficients, indices = utils.indexed_sort(coefficients, reverse=True)
 
         def threshold_calculate(stats_number, stat_index):
             inverse_sum = 0.0
